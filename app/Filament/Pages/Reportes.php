@@ -19,11 +19,18 @@ class Reportes extends Page
     protected static ?string $slug = 'reportes';
     protected string $view = 'filament.pages.reportes';
 
-    /** Dispara un evento de navegador para abrir el PDF en popup */
+    /**
+     * Abre la URL del reporte y fuerza descarga (?download=1).
+     * Usa un evento de navegador (Livewire v3) para redirigir.
+     */
     private function openReport(string $routeName, array $params = []): void
     {
         $url = route($routeName, array_filter($params));
-        // Livewire v3: browser event
+
+        // Forzar descarga siempre
+        $url .= (str_contains($url, '?') ? '&' : '?') . 'download=1';
+
+        // Livewire v3 browser event
         $this->dispatch('open-window', url: $url);
     }
 
@@ -53,10 +60,11 @@ class Reportes extends Page
         ];
 
         return [
+            // ---- PDFs base ----
             Action::make('pdfAsistencia')
                 ->label('PDF Asistencia')->icon('heroicon-o-document-text')->color('gray')
                 ->form([...$fechaFields, ...$filtrosFields])
-                ->modalSubmitActionLabel('Abrir')
+                ->modalSubmitActionLabel('Descargar')
                 ->action(function (array $data) {
                     $this->openReport('reportes.asistencia', [
                         'desde'       => $data['desde'] ?? null,
@@ -69,7 +77,7 @@ class Reportes extends Page
             Action::make('pdfInasistencias')
                 ->label('PDF Inasistencias')->icon('heroicon-o-exclamation-triangle')->color('warning')
                 ->form([...$fechaFields, ...$filtrosFields])
-                ->modalSubmitActionLabel('Abrir')
+                ->modalSubmitActionLabel('Descargar')
                 ->action(function (array $data) {
                     $this->openReport('reportes.inasistencias', [
                         'desde'       => $data['desde'] ?? null,
@@ -82,7 +90,7 @@ class Reportes extends Page
             Action::make('pdfTardanzas')
                 ->label('PDF Tardanzas')->icon('heroicon-o-clock')->color('rose')
                 ->form([...$fechaFields, ...$filtrosFields])
-                ->modalSubmitActionLabel('Abrir')
+                ->modalSubmitActionLabel('Descargar')
                 ->action(function (array $data) {
                     $this->openReport('reportes.tardanzas', [
                         'desde'       => $data['desde'] ?? null,
@@ -95,7 +103,7 @@ class Reportes extends Page
             Action::make('pdfConsolidado')
                 ->label('PDF Consolidado')->icon('heroicon-o-clipboard-document-check')->color('indigo')
                 ->form([...$fechaFields, TextInput::make('area_id')->label('Área ID')->numeric()->placeholder('Todas')])
-                ->modalSubmitActionLabel('Abrir')
+                ->modalSubmitActionLabel('Descargar')
                 ->action(function (array $data) {
                     $this->openReport('reportes.consolidado', [
                         'desde'   => $data['desde'] ?? null,
@@ -111,7 +119,7 @@ class Reportes extends Page
                     ...$filtrosFields,
                     TextInput::make('tarifa_hora')->label('Tarifa por hora (S/.)')->numeric()->default(0)->minValue(0),
                 ])
-                ->modalSubmitActionLabel('Abrir')
+                ->modalSubmitActionLabel('Descargar')
                 ->action(function (array $data) {
                     $this->openReport('reportes.valorizado', [
                         'desde'       => $data['desde'] ?? null,
@@ -121,6 +129,15 @@ class Reportes extends Page
                         'tarifa_hora' => $data['tarifa_hora'] ?? null,
                     ]);
                 }),
+
+            // ---- NUEVOS reportes de ausencias (HTML/Chart) ----
+            Action::make('ausenciasTrabajador')
+                ->label('Ausencias por trabajador')->icon('heroicon-o-user-group')->color('slate')
+                ->action(fn () => $this->openReport('reportes.ausencias.trabajador')),
+
+            Action::make('ausenciasGeneral')
+                ->label('Ausencias general por mes')->icon('heroicon-o-chart-bar')->color('slate')
+                ->action(fn () => $this->openReport('reportes.ausencias.general')),
         ];
     }
 }

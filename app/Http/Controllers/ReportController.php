@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Models\AsistenciaDia;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Carbon\CarbonImmutable as Carbon;
+use Barryvdh\DomPDF\Facade\Pdf;
 
 class ReportController extends Controller
 {
@@ -16,13 +18,16 @@ class ReportController extends Controller
         $data['ruc']     = $data['ruc']     ?? '20511039470';
         $data['titulo']  = $data['titulo']  ?? 'REPORTE';
 
-        if (class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
-            $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadView($view, $data)
-                ->setPaper('a4', 'portrait');
-            // Si quieres mejor nitidez:
-            // ->setOptions(['dpi' => 120, 'defaultFont' => 'DejaVu Sans']);
+        if (class_exists(Pdf::class)) {
+            $pdf = Pdf::loadView($view, $data)->setPaper('a4', 'portrait');
+            $filename = $filename . '.pdf';
 
-            return $pdf->stream($filename . '.pdf');
+            // ✅ Descarga si viene ?download=1
+            if (request()->boolean('download')) {
+                return $pdf->download($filename);
+            }
+
+            return $pdf->stream($filename);
         }
 
         // Fallback: devuelve HTML
@@ -50,14 +55,12 @@ class ReportController extends Controller
         ];
     }
 
-    /** Arma el texto de rango para mostrar bajo la cabecera */
     private function rangoTexto(array $p): string
     {
         $fmt = fn (Carbon $c) => $c->timezone('America/Lima')->format('d/m/Y');
         return $fmt($p['desde']) . ' — ' . $fmt($p['hasta']);
     }
 
-    /** Query base de asistencias con joins necesarios */
     private function baseQuery(array $p)
     {
         $q = AsistenciaDia::query()
@@ -76,6 +79,8 @@ class ReportController extends Controller
 
         return $q;
     }
+
+    /** ===================== REPORTES DE ASISTENCIA ===================== */
 
     public function asistencia(Request $request)
     {
@@ -132,7 +137,6 @@ class ReportController extends Controller
         $p    = $this->params($request);
         $rows = $this->baseQuery($p)->get();
 
-        // Sumas por empleado
         $resumen = $rows->groupBy('empleado_id')->map(function ($g) {
             $primero = $g->first();
             return [
@@ -177,5 +181,93 @@ class ReportController extends Controller
         ];
 
         return $this->renderPdfOrHtml('reportes.pdf.valorizado', $data, 'reporte-valorizado');
+    }
+
+    /** ===================== REPORTES DE AUSENCIAS ===================== */
+
+    public function reportePorTrabajador()
+    {
+        Carbon::setLocale('es');
+
+        $datos = DB::table('empleados as e')
+            ->join('ausencias as au', 'au.empleado_id', '=', 'e.id')
+            ->select(
+                DB::raw('CONCAT(e.apellidos, ", ", e.nombres) as nombre_completo'),
+                DB::raw('YEAR(au.fecha) as anio'),
+                DB::raw('MONTH(au.fecha) as mes_numero'),
+                'au.motivo',
+                DB::raw('COUNT(au.id) as total')
+            )
+            ->groupBy('nombre_completo', 'anio', 'mes_numero', 'motivo')
+            ->orderBy('anio', 'desc')
+            ->orderBy('mes_numero', 'asc')
+            ->orderBy('nombre_completo', 'asc')
+            ->get()
+            ->map(function ($item) {
+                $item->mes_nombre = Carbon::create()->month($item->mes_numero)->translatedFormat('F');
+                return $item;
+            });
+
+        $reporteAgrupado = $datos->groupBy('nombre_completo');
+
+        return view('reportes.pdf.por_trabajador', ['reporte' => $reporteAgrupado]);
+    }
+
+    public function reporteGeneralPorMes()
+    {
+        Carbon::setLocale('es');
+
+        $datos = DB::table('ausencias as au')
+            ->select(
+                DB::raw('YEAR(au.fecha) as anio'),
+                DB::raw('MONTH(au.fecha) as mes_numero'),
+                'au.motivo',
+                DB::raw('COUNT(au.id) as total')
+            )
+            ->groupBy('anio', 'mes_numero', 'au.motivo')
+            ->orderBy('anio', 'asc')
+            ->orderBy('mes_numero', 'asc')
+            ->get();
+
+        $labels = [];
+        $datasets = [];
+        
+        $motivos = $datos->pluck('motivo')->unique();
+        $periodos = $datos->map(fn($i) => $i->anio . '-' . str_pad($i->mes_numero, 2, '0', STR_PAD_LEFT))
+                          ->unique()->sort();
+
+        foreach ($periodos as $periodo) {
+            [$anio, $mes_num] = explode('-', $periodo);
+            $labels[] = Carbon::create($anio, $mes_num, 1)->translatedFormat('F Y');
+        }
+
+        $colores = [
+            'FALTA NO JUSTIFICADA' => 'rgba(239, 68, 68, 0.7)',
+            'DESCANSO SEMANAL' => 'rgba(34, 197, 94, 0.7)',
+            'SANCION DISCIPLINARIA' => 'rgba(249, 115, 22, 0.7)',
+            'default' => 'rgba(107, 114, 128, 0.7)'
+        ];
+
+        foreach ($motivos as $motivo) {
+            $dataParaMotivo = [];
+            foreach ($periodos as $periodo) {
+                [$anio, $mes_num] = explode('-', $periodo);
+                $total = $datos->where('anio', $anio)
+                               ->where('mes_numero', $mes_num)
+                               ->where('motivo', $motivo)
+                               ->sum('total');
+                $dataParaMotivo[] = $total;
+            }
+
+            $datasets[] = [
+                'label' => $motivo,
+                'data' => $dataParaMotivo,
+                'backgroundColor' => $colores[$motivo] ?? $colores['default'],
+            ];
+        }
+
+        $chartData = json_encode(['labels' => $labels, 'datasets' => $datasets]);
+
+        return view('reportes.pdf.general_mes', ['chartData' => $chartData]);
     }
 }
